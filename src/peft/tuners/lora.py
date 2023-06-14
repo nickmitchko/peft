@@ -36,7 +36,6 @@ from ..utils import (
     transpose,
 )
 
-
 if is_bnb_available():
     import bitsandbytes as bnb
 
@@ -70,7 +69,7 @@ class LoraConfig(PeftConfig):
         default=None,
         metadata={
             "help": "List of module names or regex expression of the module names to replace with Lora."
-            "For example, ['q', 'v'] or '.*decoder.*(SelfAttention|EncDecAttention).*(q|v)$' "
+                    "For example, ['q', 'v'] or '.*decoder.*(SelfAttention|EncDecAttention).*(q|v)$' "
         },
     )
     lora_alpha: int = field(default=None, metadata={"help": "Lora alpha"})
@@ -84,8 +83,8 @@ class LoraConfig(PeftConfig):
         default=None,
         metadata={
             "help": "List of modules apart from LoRA layers to be set as trainable and saved in the final checkpoint. "
-            "For example, in Sequence Classification or Token Classification tasks, "
-            "the final layer `classifier/score` are randomly initialized and as such need to be trainable and saved."
+                    "For example, in Sequence Classification or Token Classification tasks, "
+                    "the final layer `classifier/score` are randomly initialized and as such need to be trainable and saved."
         },
     )
     init_lora_weights: bool = field(
@@ -399,7 +398,8 @@ class LoraModel(torch.nn.Module):
             raise ValueError("GPT2 models are not supported for merging LORA layers")
 
         if getattr(self.model, "is_loaded_in_8bit", False) or getattr(self.model, "is_loaded_in_4bit", False):
-            raise ValueError("Cannot merge LORA layers when the model is loaded in 8-bit mode")
+            # raise ValueError("Cannot merge LORA layers when the model is loaded in 8-bit mode")
+            print("Cannot merge LORA layers when the model is loaded in 8-bit mode")
 
         key_list = [key for key, _ in self.model.named_modules() if "lora" not in key]
         for key in key_list:
@@ -408,8 +408,24 @@ class LoraModel(torch.nn.Module):
             except AttributeError:
                 continue
             if isinstance(target, LoraLayer):
+
                 if isinstance(target, nn.Embedding):
                     new_module = torch.nn.Embedding(target.in_features, target.out_features)
+                elif isinstance(target, bnb.nn.Linear8bitLt):
+                    # makes bnb required to load this model
+                    new_module = bnb.nn.Linear8bitLt(target.in_features, target.out_features,
+                                                     bias=target.bias,
+                                                     has_fp16_weights=target.state.has_fp16_weights,
+                                                     memory_efficient_backward=target.state.memory_efficient_backward,
+                                                     index=target.index,
+                                                     threshold=target.state.threshold)
+                elif isinstance(target, bnb.nn.Linear4bit):
+                    # makes bnb required to load this model
+                    new_module = bnb.nn.Linear4bit(target.in_features, target.out_features,
+                                                   bias=target.bias,
+                                                   compute_dtype=target.compute_dtype,
+                                                   compress_statistics=target.weight.compress_statistics,
+                                                   quant_type=target.weight.quant_type)
                 else:
                     bias = target.bias is not None
                     new_module = torch.nn.Linear(target.in_features, target.out_features, bias=bias)
@@ -441,7 +457,7 @@ class LoraModel(torch.nn.Module):
                         if adapter not in target.lora_A:
                             continue
                         target.lora_A[adapter_name].weight.data += (
-                            target.lora_A[adapter].weight.data * weight * target.scaling[adapter]
+                                target.lora_A[adapter].weight.data * weight * target.scaling[adapter]
                         )
                         target.lora_B[adapter_name].weight.data += target.lora_B[adapter].weight.data * weight
 
@@ -452,7 +468,7 @@ class LoraModel(torch.nn.Module):
                         if adapter not in target.lora_embedding_A:
                             continue
                         target.lora_embedding_A[adapter_name].data += (
-                            target.lora_embedding_A[adapter].data * weight * target.scaling[adapter]
+                                target.lora_embedding_A[adapter].data * weight * target.scaling[adapter]
                         )
                         target.lora_embedding_B[adapter_name].data += target.lora_embedding_B[adapter].data * weight
 
@@ -488,9 +504,9 @@ def mark_only_lora_as_trainable(model: nn.Module, bias: str = "none") -> None:
 
 class LoraLayer:
     def __init__(
-        self,
-        in_features: int,
-        out_features: int,
+            self,
+            in_features: int,
+            out_features: int,
     ):
         self.r = {}
         self.lora_alpha = {}
@@ -561,15 +577,16 @@ class LoraLayer:
 class Linear(nn.Linear, LoraLayer):
     # Lora implemented in a dense layer
     def __init__(
-        self,
-        adapter_name: str,
-        in_features: int,
-        out_features: int,
-        r: int = 0,
-        lora_alpha: int = 1,
-        lora_dropout: float = 0.0,
-        fan_in_fan_out: bool = False,  # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
-        **kwargs,
+            self,
+            adapter_name: str,
+            in_features: int,
+            out_features: int,
+            r: int = 0,
+            lora_alpha: int = 1,
+            lora_dropout: float = 0.0,
+            fan_in_fan_out: bool = False,
+            # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
+            **kwargs,
     ):
         init_lora_weights = kwargs.pop("init_lora_weights", True)
 
@@ -594,11 +611,11 @@ class Linear(nn.Linear, LoraLayer):
             return
         if self.r[self.active_adapter] > 0:
             self.weight.data += (
-                transpose(
-                    self.lora_B[self.active_adapter].weight @ self.lora_A[self.active_adapter].weight,
-                    self.fan_in_fan_out,
-                )
-                * self.scaling[self.active_adapter]
+                    transpose(
+                        self.lora_B[self.active_adapter].weight @ self.lora_A[self.active_adapter].weight,
+                        self.fan_in_fan_out,
+                    )
+                    * self.scaling[self.active_adapter]
             )
             self.merged = True
 
@@ -610,11 +627,11 @@ class Linear(nn.Linear, LoraLayer):
             return
         if self.r[self.active_adapter] > 0:
             self.weight.data -= (
-                transpose(
-                    self.lora_B[self.active_adapter].weight @ self.lora_A[self.active_adapter].weight,
-                    self.fan_in_fan_out,
-                )
-                * self.scaling[self.active_adapter]
+                    transpose(
+                        self.lora_B[self.active_adapter].weight @ self.lora_A[self.active_adapter].weight,
+                        self.fan_in_fan_out,
+                    )
+                    * self.scaling[self.active_adapter]
             )
             self.merged = False
 
@@ -632,10 +649,10 @@ class Linear(nn.Linear, LoraLayer):
             x = x.to(self.lora_A[self.active_adapter].weight.dtype)
 
             result += (
-                self.lora_B[self.active_adapter](
-                    self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
-                )
-                * self.scaling[self.active_adapter]
+                    self.lora_B[self.active_adapter](
+                        self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
+                    )
+                    * self.scaling[self.active_adapter]
             )
         else:
             result = F.linear(x, transpose(self.weight, self.fan_in_fan_out), bias=self.bias)
@@ -648,14 +665,14 @@ class Linear(nn.Linear, LoraLayer):
 class Embedding(nn.Embedding, LoraLayer):
     # LoRA implemented in a Embedding layer
     def __init__(
-        self,
-        adapter_name: str,
-        num_embeddings: int,
-        embedding_dim: int,
-        r: int = 0,
-        lora_alpha: int = 1,
-        lora_dropout: float = 0.0,
-        **kwargs,
+            self,
+            adapter_name: str,
+            num_embeddings: int,
+            embedding_dim: int,
+            r: int = 0,
+            lora_alpha: int = 1,
+            lora_dropout: float = 0.0,
+            **kwargs,
     ):
         init_lora_weights = kwargs.pop("init_lora_weights", True)
 
@@ -674,10 +691,10 @@ class Embedding(nn.Embedding, LoraLayer):
             return
         if self.r[self.active_adapter] > 0:
             self.weight.data -= (
-                transpose(
-                    self.lora_embedding_B[self.active_adapter] @ self.lora_embedding_A[self.active_adapter], True
-                )
-                * self.scaling[self.active_adapter]
+                    transpose(
+                        self.lora_embedding_B[self.active_adapter] @ self.lora_embedding_A[self.active_adapter], True
+                    )
+                    * self.scaling[self.active_adapter]
             )
             self.merged = False
 
@@ -687,10 +704,10 @@ class Embedding(nn.Embedding, LoraLayer):
             return
         if self.r[self.active_adapter] > 0:
             self.weight.data += (
-                transpose(
-                    self.lora_embedding_B[self.active_adapter] @ self.lora_embedding_A[self.active_adapter], True
-                )
-                * self.scaling[self.active_adapter]
+                    transpose(
+                        self.lora_embedding_B[self.active_adapter] @ self.lora_embedding_A[self.active_adapter], True
+                    )
+                    * self.scaling[self.active_adapter]
             )
             self.merged = True
 
@@ -698,12 +715,12 @@ class Embedding(nn.Embedding, LoraLayer):
         if self.disable_adapters:
             if self.r[self.active.adapter] > 0 and self.merged:
                 self.weight.data -= (
-                    transpose(
-                        self.lora_embedding_B[self.active_adapter].weight
-                        @ self.lora_embedding_A[self.active_adapter].weight,
-                        True,
-                    )
-                    * self.scaling[self.active_adapter]
+                        transpose(
+                            self.lora_embedding_B[self.active_adapter].weight
+                            @ self.lora_embedding_A[self.active_adapter].weight,
+                            True,
+                        )
+                        * self.scaling[self.active_adapter]
                 )
                 self.merged = False
             return nn.Embedding.forward(self, x)
@@ -731,14 +748,14 @@ if is_bnb_available():
     class Linear8bitLt(bnb.nn.Linear8bitLt, LoraLayer):
         # Lora implemented in a dense layer
         def __init__(
-            self,
-            adapter_name,
-            in_features,
-            out_features,
-            r: int = 0,
-            lora_alpha: int = 1,
-            lora_dropout: float = 0.0,
-            **kwargs,
+                self,
+                adapter_name,
+                in_features,
+                out_features,
+                r: int = 0,
+                lora_alpha: int = 1,
+                lora_dropout: float = 0.0,
+                **kwargs,
         ):
             bnb.nn.Linear8bitLt.__init__(
                 self,
@@ -770,34 +787,35 @@ if is_bnb_available():
                     if x.dtype != torch.float32:
                         x = x.float()
                     output = (
-                        self.lora_B[self.active_adapter](
-                            self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
-                        ).to(expected_dtype)
-                        * self.scaling[self.active_adapter]
+                            self.lora_B[self.active_adapter](
+                                self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
+                            ).to(expected_dtype)
+                            * self.scaling[self.active_adapter]
                     )
                 else:
                     output = (
-                        self.lora_B[self.active_adapter](
-                            self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
-                        )
-                        * self.scaling[self.active_adapter]
+                            self.lora_B[self.active_adapter](
+                                self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
+                            )
+                            * self.scaling[self.active_adapter]
                     )
                 result += output
             return result
+
 
     if is_bnb_4bit_available():
 
         class Linear4bit(bnb.nn.Linear4bit, LoraLayer):
             # Lora implemented in a dense layer
             def __init__(
-                self,
-                adapter_name,
-                in_features,
-                out_features,
-                r: int = 0,
-                lora_alpha: int = 1,
-                lora_dropout: float = 0.0,
-                **kwargs,
+                    self,
+                    adapter_name,
+                    in_features,
+                    out_features,
+                    r: int = 0,
+                    lora_alpha: int = 1,
+                    lora_dropout: float = 0.0,
+                    **kwargs,
             ):
                 bnb.nn.Linear4bit.__init__(
                     self,
@@ -828,17 +846,17 @@ if is_bnb_available():
                         expected_dtype = result.dtype
                         x = x.to(self.lora_A[self.active_adapter].weight.dtype)
                         output = (
-                            self.lora_B[self.active_adapter](
-                                self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
-                            ).to(expected_dtype)
-                            * self.scaling[self.active_adapter]
+                                self.lora_B[self.active_adapter](
+                                    self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
+                                ).to(expected_dtype)
+                                * self.scaling[self.active_adapter]
                         )
                     else:
                         output = (
-                            self.lora_B[self.active_adapter](
-                                self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
-                            )
-                            * self.scaling[self.active_adapter]
+                                self.lora_B[self.active_adapter](
+                                    self.lora_A[self.active_adapter](self.lora_dropout[self.active_adapter](x))
+                                )
+                                * self.scaling[self.active_adapter]
                         )
                     result += output
                 return result
